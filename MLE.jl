@@ -16,28 +16,28 @@ t = repeat(1:12,10000)
 df = [df DataFrame(t=t) DataFrame(xbc = df.xb .- 4)]
 df.xbc[df.school .== 1] = df.xbc[df.school .== 1] .+ 8
 
-
-S = df.school
-
 t = df.t
 
-β0 = [1, 2, 1.9]
-β1 = [1.1, 2.1, 2.2]
-σ = repeat([1.1],2*T+2)
-δz = [1.1, 1.1]
-δt = 1.1
-ρ = 1.2
-nodes, weights = gausshermite(10000)
 
-function mle(params, df)
-    β0 = params[1:3]
-    β1 = params[4:6]
-    σ = params[10:35]
-    δz = params[7:8]
-    δt = params[9]
+β0 = theta0[1:3]
+β1 = theta0[4:6]
+σ = theta0[11:36]
+δz = theta0[7:8]
+δt = theta0[9]
+σ = exp.(σ)
+ρ = theta0[10]
+
+function mle(theta, df)
+    β0 = theta[1:3]
+    β1 = theta[4:6]
+    σ = theta[11:36]
+    δz = theta[7:8]
+    δt = theta[9]
     σ = exp.(σ)
+    ρ = theta[10]
     df0 = df[df[:school] .== 0, :]
     df1 = df[df[:school] .== 1, :]
+    dfsel = by(df, :caseid, x -> mean(x.school))
     Y0 = df0.y
     Y1 = df1.y
     X0 = [df0.xa df0.xb df0.xb.*df0.xb]
@@ -50,33 +50,36 @@ function mle(params, df)
         Xt = [df.xa df.xb df.xb.*df.xb df.xbc df.xbc.*df.xbc][ df.t .== i, :]
         global Xs = Xt .+ Xs
     end
-    sel = Xs[:,1:3]*β1 .- [Xs[:,1] Xs[:,4:5]]*β0 .- Z*δz .- σ[2*T+2].*nodes.*δt
-    selection0s = (pdf.(Normal(), (epsilon0s[ df0.t .== 1]  .- ρ*σ[2*T+2].*nodes)./σ[1])./σ[1])
-    selection1s =  (pdf.(Normal(), (epsilon1s[ df1.t .== 1] .-  σ[2*T+2].*nodes)./σ[T+1])./σ[T+1])
-    prob0 = 1 .- cdf.(Normal(), (sel) ./ σ[2*T+1])
-    prob1 = cdf.(Normal(), (sel) ./ σ[2*T+1])
-    thetad = 1/(σ[2*T+2]*sqrt(2*pi))
-    integ0 = sum((pdf.(Normal(), epsilon0s[ df0.t .== 1]./σ[1])./σ[1]).*(1 .- cdf.(Normal(), (sel) ./ σ[2*T+1])).*1/(σ[2*T+2]*sqrt(2*pi)).*weights)
-
-
-
-
-
-
-    selection0s = log.(pdf.(Normal(), epsilon0s[ df0.t .== 1]./σ[1])) .- log(σ[1])
-    selection1s =  log.(pdf.(Normal(), epsilon1s[ df1.t .== 1]./σ[T+1])) .- log(σ[T+1])
-    for i = 2:T
-        selection0t = log.(pdf.(Normal(), epsilon0s[ df0.t .== i]./σ[i])) .- log(σ[i])
-        selection0s = selection0s .+ selection0t
-        selection1t = log.(pdf.(Normal(), epsilon1s[ df1.t .== i]./σ[T+i])) .- log(σ[T+i])
-        selection1s = selection1s .+ selection1t
+    sel = Xs[:,1:3]*β1 .- [Xs[:,1] Xs[:,4:5]]*β0 .- Z*δz
+    contrib0 = 0.
+    contrib1 = 0.
+    nodes, weights = gausshermite(100)
+    for t = 1:T
+        for i = 1:4352
+            integ1 = sum((pdf.(Normal(), (epsilon1s[ df1.t .== t][i] .- ρ*σ[2*T+2].*nodes)./σ[T+t])./σ[T+t]).*(cdf.(Normal(), (sel[dfsel.x1 .== 1][i] .- σ[2*T+2].*nodes.*δt) ./ σ[2*T+1])).*1/(σ[2*T+2]*sqrt(2*pi)).*weights)
+            contrib1 = contrib1 + log(integ1)
+        end
+        for j = 1:5648
+            integ0 = sum((pdf.(Normal(), (epsilon0s[ df0.t .== t][j] .- ρ*σ[2*T+2].*nodes)./σ[t])./σ[t]).*(1 .- cdf.(Normal(), (sel[dfsel.x1 .== 0][j] .- σ[2*T+2].*nodes.*δt) ./ σ[2*T+1])).*1/(σ[2*T+2]*sqrt(2*pi)).*weights)
+            contrib0 = contrib0 + log(integ0)
+        end
     end
-    ll = - sum(T.*(1 .- log.(cdf.(Normal(), (sel) ./ σ[2*T+1])))) - sum(selection0s) - sum( T.*log.(cdf.(Normal(), (sel) ./ σ[2*T+1]))) - sum(selection1s)
+    return ll = -contrib0 - contrib1
 end
-β0 = [1 2 3]
-β1 = [1.1 2.1 2.2]
-σ = transpose(repeat([1.1],2*T+1))
-δz = [1.1 1.1]
+integ1 = sum((pdf.(Normal(), (epsilon1s[ df1.t .== 2][222] .- ρ*σ[2*T+2].*nodes)./σ[T+2])./σ[T+2]).*(cdf.(Normal(), (sel[dfsel.x1 .== 1][222] .- σ[2*T+2].*nodes.*δt) ./ σ[2*T+1])).*1/(σ[2*T+2]*sqrt(2*pi)).*weights)
 
-theta0 = [β0 β1 δz σ]
-mini = optimize(vars -> mle(vars, df), theta0)
+
+β0 = [1. 2. -0.01]
+β1 = [.9 3.4 -0.01]
+σ = transpose(repeat([1.1],2*T+2))
+δz = [5.1 3.1]
+δt = 0.5
+ρ = 0.8
+
+theta = [β0 β1 δz δt ρ σ]
+
+mle(theta,df)
+
+
+
+@time mini = optimize(vars -> mle(vars, df), theta0, BFGS())
