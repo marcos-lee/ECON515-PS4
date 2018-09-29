@@ -56,7 +56,7 @@ function mle(params, df)
         selection1t = log.(pdf.(Normal(), epsilon1s[ df1.t .== i]./σ[T+i])) .- log(σ[T+i])
         selection1s = selection1s .+ selection1t
     end
-    ll = - sum(T.*log.(cdf.(Normal(), 1 .- (sel) ./ σ[2*T+1]))) - sum(selection0s) - sum( T.*log.(cdf.(Normal(), (sel) ./ σ[2*T+1]))) - sum(selection1s)
+    ll = - sum(T.*(1 .- log.(cdf.(Normal(),(sel) ./ σ[2*T+1])))) - sum(selection0s) - sum( T.*log.(cdf.(Normal(), (sel) ./ σ[2*T+1]))) - sum(selection1s)
 end
 β0 = [1 2]
 β1 = [1.1 2.1]
@@ -65,3 +65,8 @@ end
 
 theta0 = [β0 β1 δz σ]
 mini = optimize(vars -> mle(vars, df), theta0, BFGS())
+
+
+Optim.minimizer(mini)
+Optim.minimizer(mini)[7:31]= exp.(Optim.minimizer(mini)[7:31]).^2
+σ = params[7:31]
