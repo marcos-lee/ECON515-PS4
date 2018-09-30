@@ -13,19 +13,13 @@ df = load("fakedata.csv") |> DataFrame
 global T = maximum(df.age[df[:caseid] .== 1, :]) - minimum(df.age[df[:caseid] .== 1, :]) + 1
 
 t = repeat(1:12,10000)
-df = [df DataFrame(t=t) DataFrame(xbc = df.xb .- 4)]
+df = [df DataFrame(t=t) DataFrame(xbc = df.xb .- 4) ]
 df.xbc[df.school .== 1] = df.xbc[df.school .== 1] .+ 8
+df = [df DataFrame(xb2 = df.xb.*df.xb) DataFrame(xbc2 = df.xbc.*df.xbc)]
 
-t = df.t
+dfsel = by(df, :caseid, x -> mean(x.school))
 
 
-β0 = theta0[1:3]
-β1 = theta0[4:6]
-σ = theta0[11:36]
-δz = theta0[7:8]
-δt = theta0[9]
-σ = exp.(σ)
-ρ = theta0[10]
 
 function mle(theta, df)
     β0 = theta[1:3]
@@ -35,38 +29,34 @@ function mle(theta, df)
     δt = theta[9]
     σ = exp.(σ)
     ρ = theta[10]
-    df0 = df[df[:school] .== 0, :]
-    df1 = df[df[:school] .== 1, :]
-    dfsel = by(df, :caseid, x -> mean(x.school))
-    Y0 = df0.y
-    Y1 = df1.y
-    X0 = [df0.xa df0.xb df0.xb.*df0.xb]
-    X1 = [df1.xa df1.xb df1.xb.*df1.xb]
-    Z = [unique(df,:caseid).za unique(df,:caseid).zb]
-    epsilon0s = Y0 .- X0*β0
-    epsilon1s = Y1 .- X1*β1
-    Xs = [df.xa df.xb df.xb.*df.xb df.xbc df.xbc.*df.xbc][ df.t .== 1, :]
-    for i = 2:T
-        Xt = [df.xa df.xb df.xb.*df.xb df.xbc df.xbc.*df.xbc][ df.t .== i, :]
-        global Xs = Xt .+ Xs
+    epsilon0s = df.y .- [df.xa df.xb df.xb2]*β0
+    epsilon1s = df.y .- [df.xa df.xb df.xb2]*β1
+    Xs = by(df, :caseid) do x
+        DataFrame(xsa = sum(x.xa), xsb = sum(x.xb), xsb2 = sum(x.xb2), xsbc = sum(x.xbc), xsbc2 = sum(x.xbc2))
     end
-    sel = Xs[:,1:3]*β1 .- [Xs[:,1] Xs[:,4:5]]*β0 .- Z*δz
-    contrib0 = 0.
-    contrib1 = 0.
+    df = join(df, Xs, on=:caseid, kind=:inner)
+    df = [df DataFrame(sel = repeat([transpose([df[:xsa] df[:xsbc] df[:xsbc2]][1,:])*β1 - transpose([df[:xsa] df[:xsb] df[:xsb2]][1,:])*β0],120000))]
+    #for i = 1:120000 #very slow, there has to be a better way
+    #    if df[:school][i] == 1
+    #        df.sel[i] = transpose([df[:xsa] df[:xsb] df[:xsb2]][i,:])*β1 - transpose([df[:xsa] df[:xsbc] df[:xsbc2]][i,:])*β0
+    #    else
+    #        df.sel[i] = transpose([df[:xsa] df[:xsbc] df[:xsbc2]][i,:])*β1 - transpose([df[:xsa] df[:xsb] df[:xsb2]][i,:])*β0
+    #    end
+    #end
+    df.sel = df.sel .- [df.za df.zb]*δz
+    contrib0 = repeat([0.],120000)
+    contrib1 = repeat([0.],120000)
     nodes, weights = gausshermite(100)
-    for t = 1:T
-        for i = 1:4352
-            integ1 = sum((pdf.(Normal(), (epsilon1s[ df1.t .== t][i] .- ρ*σ[2*T+2].*nodes)./σ[T+t])./σ[T+t]).*(cdf.(Normal(), (sel[dfsel.x1 .== 1][i] .- σ[2*T+2].*nodes.*δt) ./ σ[2*T+1])).*1/(σ[2*T+2]*sqrt(2*pi)).*weights)
-            contrib1 = contrib1 + log(integ1)
-        end
-        for j = 1:5648
-            integ0 = sum((pdf.(Normal(), (epsilon0s[ df0.t .== t][j] .- ρ*σ[2*T+2].*nodes)./σ[t])./σ[t]).*(1 .- cdf.(Normal(), (sel[dfsel.x1 .== 0][j] .- σ[2*T+2].*nodes.*δt) ./ σ[2*T+1])).*1/(σ[2*T+2]*sqrt(2*pi)).*weights)
-            contrib0 = contrib0 + log(integ0)
-        end
+    for i = 1:120000
+        t = df.t[i]
+        integ1 = sum((pdf.(Normal(), (epsilon1s[i] .- ρ*σ[2*T+2].*nodes)./σ[T+t])./σ[T+t]).*(cdf.(Normal(), (df.sel[i] .- σ[2*T+2].*nodes.*δt) ./ σ[2*T+1])).*1/(σ[2*T+2]*sqrt(2*pi)).*weights)
+        contrib1[i] = log(integ1)
+        integ0 = sum((pdf.(Normal(), (epsilon0s[i] .- ρ*σ[2*T+2].*nodes)./σ[T+t])./σ[T+t]).*(1 .- cdf.(Normal(), (df.sel[i] .- σ[2*T+2].*nodes.*δt) ./ σ[2*T+1])).*1/(σ[2*T+2]*sqrt(2*pi)).*weights)
+        contrib0[i] = log(integ0)
     end
-    return ll = -contrib0 - contrib1
+    return ll = -sum(contrib0[df.school .== 0]) - sum(contrib1[df.school .==1])
 end
-integ1 = sum((pdf.(Normal(), (epsilon1s[ df1.t .== 2][222] .- ρ*σ[2*T+2].*nodes)./σ[T+2])./σ[T+2]).*(cdf.(Normal(), (sel[dfsel.x1 .== 1][222] .- σ[2*T+2].*nodes.*δt) ./ σ[2*T+1])).*1/(σ[2*T+2]*sqrt(2*pi)).*weights)
+
 
 
 β0 = [1. 2. -0.01]
@@ -78,8 +68,9 @@ integ1 = sum((pdf.(Normal(), (epsilon1s[ df1.t .== 2][222] .- ρ*σ[2*T+2].*node
 
 theta = [β0 β1 δz δt ρ σ]
 
-mle(theta,df)
+@time mle(theta,df)
 
 
 
-@time mini = optimize(vars -> mle(vars, df), theta0, BFGS())
+@time mini = optimize(vars -> mle(vars, df), theta0)
+@time mini1 = optimize(vars -> mle(vars, df), theta0, BFGS())
