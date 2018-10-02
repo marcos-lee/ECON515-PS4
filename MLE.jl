@@ -180,6 +180,8 @@ function mlesimple(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFrame)
     end
     #so, contrib0 is the likelihood contribution of every individual i. now we take the log of each row and sum
     return ll = -sum(log.(contrib0)) - sum(log.(contrib1))
+
+
 end
 
 
@@ -243,3 +245,4 @@ Optim.minimizer(mini)[13:13+2*T+1] = exp.(Optim.minimizer(mini)[13:13+2*T+1]).^2
 
 σ = exp.(σ)
 =#
+
