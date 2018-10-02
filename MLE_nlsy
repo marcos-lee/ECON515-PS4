@@ -1,0 +1,272 @@
+using Distributions
+using LinearAlgebra
+using Optim
+using Statistics
+using DataFrames
+using CSVFiles
+using FastGaussQuadrature
+using NLSolversBase
+
+#df = load("fakedata.csv") |> DataFrame
+#df = load("fake_data_julia.csv") |> DataFrame #i changed the variable name income to y
+df = load("nlsy.csv") |> DataFrame #i changed the variable name income to y
+
+#define global number of periods and unique individuals
+const T = convert(Int64,maximum(df.age[df[:caseid] .== 1, :]) - minimum(df.age[df[:caseid] .== 1, :]) + 1)
+const Ni = convert(Int64,maximum(df.caseid))
+
+#create period variable
+xb = zeros(Ni*T)
+for i = 1:Ni*T
+    if df.school[i] == 1
+        xb[i] = df.age[i] - 18
+    else
+        xb[i] = df.age[i] - 22
+    end
+end
+t = repeat(1:T,Ni)
+df = [df DataFrame(t=t) DataFrame(xa = ones(Ni*T)) DataFrame(xb = xb)]
+df = [df DataFrame(xbc = df.xb .- 4) ]
+
+#create the counterfactual experience
+df.xbc[df.school .== 1] = df.xbc[df.school .== 1] .+ 8
+df = [df DataFrame(xb2 = df.xb.*df.xb) DataFrame(xbc2 = df.xbc.*df.xbc) ]
+
+df = [df DataFrame(y = log.(df.earnings))]
+#create choice specific dataframes, with its own unique individual caseid from 1 to Ni0
+df0 = df[df.school .== 0,:]
+sort!(df0, (:t, :caseid))
+df0.caseid = repeat(1:size(df0[df0.t .== 1,:].caseid)[1],T)
+sort!(df0, (:caseid, :t))
+
+df1 = df[df.school .== 1,:]
+sort!(df1, (:t, :caseid))
+df1.caseid = repeat(1:size(df1[df1.t .== 1,:].caseid)[1],T)
+sort!(df1, (:caseid, :t))
+
+
+#selection equation sum of X variables across t=1:T
+Xs = by(df, :caseid) do x
+    DataFrame(xsa = sum(x.xa), xsb = sum(x.xb), xsb2 = sum(x.xb2), xsbc = sum(x.xbc), xsbc2 = sum(x.xbc2), za = mean(x.xa), zb = mean(x.tuit4), zc = mean(x.faminc79), zd = mean(x.numsibs), ze = mean(x.scores_cognitive_skill), school = mean(x.school))
+end
+
+#Number of unique individuals in each choice dataframe
+const Ni0 = convert(Int64,maximum(df0.caseid))
+const Ni1 = convert(Int64,maximum(df1.caseid))
+
+#define nodes and weights of gauss hermite
+const nnodes = 5
+const nodes, weights = gausshermite(nnodes)
+
+
+
+#this is a simpler version, where σ for wage equations don't vary with t
+function mlesimple(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFrame)
+    #unpack parameters. Note that, to ensure that the variances are never below 0
+    #the input is actually log(σ). Then, we exp(σ) to get the actual parameter
+    β0 = theta[1:3]
+    β1 = theta[4:6]
+    σ = exp.(theta[14:17]) #the first T are σ0, one for each t. the last Ts are for σ1.
+    δz = theta[7:11]
+    δt = theta[12]
+    σ0 = σ[1]
+    σ1 = σ[2]
+    σw = σ[3]
+    σt = σ[4]
+    ρ = theta[13]
+    #calculate the epsilons of the wage equation for each choice, for all (i,t), without θ
+    epsilon0s = df0.y .- [df0.xa df0.xb df0.xb2]*β0
+    epsilon1s = df1.y .- [df1.xa df1.xb df1.xb2]*β1
+    #Xs is the individual-level dataframe, where all the X variables are summed, and Z is unique for each i.
+    Xs = [Xs DataFrame(sel = repeat([0.],Ni))]
+    Xs0 = Xs[Xs.school .== 0,:]
+    Xs1 = Xs[Xs.school .== 1,:]
+    #this loop creates the difference of sum of future earnings in each choice
+    #note that xsb means x s[ummed]b, while xsbc is the counterfactual experience
+    #so, for school == 0 people, we use xsb, xsb2 for their β0, xsbc, xsbc2 for their β1
+    for i = 1:Ni0
+        Xs0.sel[i] = Xs0.xsa[i]*(β1[1]-β0[1]) + Xs0.xsbc[i]β1[2] - Xs0.xsb[i]*β0[2] + Xs0.xsbc2[i]β1[3] - Xs0.xsb2[i]*β0[3] #transpose([Xs.xsa Xs.xsbc Xs.xsbc2 Xs.xsc][i,:])*β1 - transpose([Xs.xsa Xs.xsb Xs.xsb2 Xs.xsc][i,:])*β0
+    end
+    for i = 1:Ni1
+        Xs1.sel[i] = Xs1.xsa[i]*(β1[1]-β0[1]) + Xs1.xsb[i]β1[2] - Xs1.xsbc[i]*β0[2] + Xs1.xsb2[i]β1[3] - Xs1.xsbc2[i]*β0[3]#transpose([Xs.xsa Xs.xsbc Xs.xsbc2 Xs.xsc][i,:])*β1 - transpose([Xs.xsa Xs.xsb Xs.xsb2 Xs.xsc][i,:])*β0
+    end
+    #this is the term inside the choice equation (without θ)
+    sel0 = Xs0.sel .- [Xs0.za Xs0.zb Xs0.zc Xs0.zd Xs0.ze]*δz
+    sel1 = Xs1.sel .- [Xs1.za Xs1.zb Xs1.zc Xs1.zd Xs1.ze]*δz
+    #create empty matrices to store integration
+    integ0 = zeros(Ni0,nnodes)
+    integ1 = zeros(Ni1,nnodes)
+    #this loop calculates for each i, the product (w.r.t time) of the pdfs of the wage eq. with the subtracted θ
+    #the θs are actually the provided nodes of the gauss-hermite.
+    #after it produces the product of pdfs, then I multiply the choice CDF probability times the weights of the quadrature
+    #notice the change of variables necessary to do the approximation, ie, θ^2/2σ = x^2
+    for i = 1:Ni0
+        temp0 = (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ0))
+        for j = 2:T
+            temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ0))
+        end
+        integ0[i,:] = (temp0).*(1 .- cdf.(Normal(), (sel0[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
+    end
+    for i = 1:Ni1
+        temp1 = (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ1))
+        for j = 2:T
+            temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ1))
+        end
+        integ1[i,:] = (temp1).*(cdf.(Normal(), (sel1[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
+    end
+    #now, we have to sum across the number of nodes, that is, sum integ0/1 across rows
+    contrib0 = repeat([0.],Ni0)
+    contrib1 = repeat([0.],Ni1)
+    for i = 1:Ni0
+        contrib0[i] = sum(integ0[i,:])./(sqrt(pi)*σ0) #
+    end
+    for i = 1:Ni1
+        contrib1[i] = sum(integ1[i,:])./(sqrt(pi)*σ1)
+    end
+    #so, contrib0 is the likelihood contribution of every individual i. now we take the log of each row and sum
+    return ll = -sum(log.(contrib0)) - sum(log.(contrib1))
+end
+
+
+
+
+
+function OLS(y,x)
+    estimate = inv(transpose(x)*x)*(transpose(x)*y)
+end
+
+
+function probit(ptheta, data)
+    res = ptheta[1] .+ data[:,1] .*ptheta[2] .+ data[:,2] .* ptheta[3] .+ data[:,3] .*ptheta[4] .+ data[:,4] .* ptheta[5]
+    q = 2 .* data[:,5] .- 1
+    ll = cdf.(Normal(0,1),q .* res)
+    LL = -sum(log.(ll))
+end
+
+data0 = [df0.xa df0.xb df0.xb2]
+data1 = [df1.xa df1.xb df1.xb2]
+
+ols0 = OLS(df0.y, data0)
+ols1 = OLS(df1.y, data1)
+
+eps0 = log(sqrt(mean((df0.y .- data0 * ols0).^2)))
+eps1 = log(sqrt(mean((df1.y .- data1 * ols1).^2)))
+
+datap = [Xs.zb Xs.zc Xs.zd Xs.ze Xs.school]
+thetap = [1. 1. 1. 1. 1.]
+@time prest = optimize(vars -> probit(vars, datap), thetap, Optim.Options(iterations = 5000))
+
+#now estimate using simpler model
+β0 = [ols0[1], ols0[2], ols0[3]]
+β1 = [ols1[1], ols1[2], ols1[3]]
+σ0 = eps0
+σ1 = eps1
+σw = 0.
+σt = log(sqrt(.4))
+δz = [Optim.minimizer(prest)[1], Optim.minimizer(prest)[2], Optim.minimizer(prest)[3], Optim.minimizer(prest)[4], Optim.minimizer(prest)[5]]
+δt = 0.5
+ρ = 0.8
+
+theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
+@time mlesimple(theta,df0, df1, Xs)
+
+@time mini1 = optimize(vars -> mlesimple(vars, df0, df1, Xs), theta, Optim.Options(iterations = 5000))
+β0 = Optim.minimizer(mini1)[1:3]
+β1 = Optim.minimizer(mini1)[4:6]
+σ = exp.(Optim.minimizer(mini1)[14:17]).^2
+δz = Optim.minimizer(mini1)[7:11]
+δt = Optim.minimizer(mini1)[12]
+ρ = Optim.minimizer(mini1)[13]
+
+
+
+
+θ = rand(Normal(0,σ[4]^2),Ni)
+θp = repeat(θ, inner=T)
+ϵ0 = rand(Normal(0,σ[1]^2),Ni0)
+ϵ0p = repeat(ϵ0, inner =T)
+ϵ1 = rand(Normal(0,σ[2]^2),Ni1)
+ϵ1p = repeat(ϵ1, inner =T)
+
+y0 = [df0.xa df0.xb df0.xb2]*β0 .+ ρ.*θp[df.school .== 0] .+ ϵ0p
+y1 = [df1.xa df1.xb df1.xb2]*β1 .+ θp[df.school .==1] .+ ϵ1p
+
+#had to increase max iterations, now it convergers, but results are way off
+y0_e = kde(y0)
+x = range(5, stop = 20, length = 150) |> collect
+plot(x, z -> pdf(y0_e,z))
+
+y0_d = kde(df0.y)
+plot(x, z -> pdf(y0_d,z))
+
+
+y1_e = kde(y1)
+plot(x, z -> pdf(y1_e,z))
+
+y1_d = kde(df1.y)
+plot(x, z -> pdf(y1_d,z))
+#its taking 4+ hours and reaching max iteration. therefore, it must be wrong
+
+#@time mini1 = optimize(vars -> mle1(vars, df0, df1, Xs), theta, BFGS())
+Xs = [Xs DataFrame(sel = repeat([0.],Ni))]
+
+Xs0 = Xs[Xs.school .== 0,:]
+Xs1 = Xs[Xs.school .== 1,:]
+#this loop creates the difference of sum of future earnings in each choice
+#note that xsb means x s[ummed]b, while xsbc is the counterfactual experience
+#so, for school == 0 people, we use xsb, xsb2 for their β0, xsbc, xsbc2 for their β1
+for i = 1:Ni
+    if df.school[i] == 0
+        Xs.sel[i] = Xs.xsa[i]*(β1[1]-β0[1]) + Xs.xsbc[i]β1[2] - Xs.xsb[i]*β0[2] + Xs.xsbc2[i]β1[3] - Xs.xsb2[i]*β0[3] #transpose([Xs.xsa Xs.xsbc Xs.xsbc2 Xs.xsc][i,:])*β1 - transpose([Xs.xsa Xs.xsb Xs.xsb2 Xs.xsc][i,:])*β0
+    else
+        Xs.sel[i] = Xs.xsa[i]*(β1[1]-β0[1]) + Xs.xsb[i]β1[2] - Xs.xsbc[i]*β0[2] + Xs.xsb2[i]β1[3] - Xs.xsbc2[i]*β0[3]#transpose([Xs.xsa Xs.xsbc Xs.xsbc2 Xs.xsc][i,:])*β1 - transpose([Xs.xsa Xs.xsb Xs.xsb2 Xs.xsc][i,:])*β0
+    end
+end
+
+sel = Xs.sel .- [Xs.za Xs.zb Xs.zc Xs.zd Xs.ze]*δz .- θ.*(T - T*ρ - δt) .- rand(Normal(0,σ[3]^2),Ni)
+
+mean(sel .> 0)
+mean(Xs.school)
+
+#=
+β0 = theta[1:3]
+β1 = theta[4:6]
+σ = exp.(theta[14:17]) #the first T are σ0, one for each t. the last Ts are for σ1.
+δz = theta[7:11]
+δt = theta[12]
+σ0 = σ[1]
+σ1 = σ[2]
+σw = σ[3]
+σt = σ[4]
+ρ = theta[13]
+
+β0 = Optim.minimizer(mini1)[1:3]
+β1 = Optim.minimizer(mini1)[4:6]
+σ = exp.(Optim.minimizer(mini1)[14:17]).^2
+δz = Optim.minimizer(mini1)[7:11]
+δt = Optim.minimizer(mini1)[12]
+ρ = Optim.minimizer(mini1)[13]
+
+
+
+
+β0 = theta[1:4]
+β1 = theta[5:8]
+σ = theta[13:13+2*T+1] #the first T are σ0, one for each t. the last Ts are for σ1.
+δz = theta[9:10]
+δt = theta[11]
+σ = exp.(σ)
+σw = σ[2*T+1]
+σt = σ[2*T+2]
+ρ = theta[12]
+
+
+β0 = Optim.minimizer(mini)[1:4]
+β1 = Optim.minimizer(mini)[5:8]
+σ = exp.(Optim.minimizer(mini)[13:13+2*T+1]).^2
+σw = σ[2*T+1]
+σt = σ[2*T+2]
+δz = Optim.minimizer(mini)[9:10]
+δt = Optim.minimizer(mini)[11]
+ρ = Optim.minimizer(mini)[12]
+=#

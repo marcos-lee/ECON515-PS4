@@ -225,7 +225,7 @@ theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
 theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
 @time mlesimple(theta,df0, df1, Xs)
 
-@time mini1 = optimize(vars -> mlesimple(vars, df0, df1, Xs), theta, Optim.Options(iterations = 10000))
+@time mini = optimize(vars -> mlesimple(vars, df0, df1, Xs), theta, Optim.Options(iterations = 5000))
 #had to increase max iterations, now it convergers, but results are way off
 
 
@@ -237,12 +237,12 @@ theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
 
 #=
 
-β0 = Optim.minimizer(mini1)[1:4]
-β1 = Optim.minimizer(mini1)[5:8]
-σ = exp.(Optim.minimizer(mini1)[13:16]).^2
-δz = Optim.minimizer(mini1)[9:10]
-δt = Optim.minimizer(mini1)[11]
-ρ = Optim.minimizer(mini1)[12]
+β0 = Optim.minimizer(mini)[1:4]
+β1 = Optim.minimizer(mini)[5:8]
+σ = exp.(Optim.minimizer(mini)[13:16]).^2
+δz = Optim.minimizer(mini)[9:10]
+δt = Optim.minimizer(mini)[11]
+ρ = Optim.minimizer(mini)[12]
 
 
 
