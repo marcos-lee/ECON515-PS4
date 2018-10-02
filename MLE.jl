@@ -8,19 +8,25 @@ using FastGaussQuadrature
 using NLSolversBase
 
 #df = load("fakedata.csv") |> DataFrame
+df = load("fake_data_julia.csv") |> DataFrame #i changed the variable name income to y
 df = load("fake_data_julia_small.csv") |> DataFrame #i changed the variable name income to y
 
 #define global number of periods and unique individuals
 const T = convert(Int64,maximum(df.age[df[:caseid] .== 1, :]) - minimum(df.age[df[:caseid] .== 1, :]) + 1)
 const Ni = convert(Int64,maximum(df.caseid))
 
+sampling = rand(Ni)
+sampling1 = zeros(Ni,T)
+for i = 1:Ni
+    sampling1[i,:] = repeat([sampling[i]], T)
+end
 #create period variable
 t = repeat(1:T,Ni)
 df = [df DataFrame(t=t) DataFrame(xbc = df.xb .- 4) ]
 
 #create the counterfactual experience
 df.xbc[df.school .== 1] = df.xbc[df.school .== 1] .+ 8
-df = [df DataFrame(xb2 = df.xb.*df.xb) DataFrame(xbc2 = df.xbc.*df.xbc)]
+df = [df DataFrame(xb2 = df.xb.*df.xb) DataFrame(xbc2 = df.xbc.*df.xbc) ]
 
 
 #create choice specific dataframes, with its own unique individual caseid from 1 to Ni0
@@ -92,14 +98,14 @@ function mle1(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFrame)
         for j = 2:T
             temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ[j])./σ[j])
         end
-        integ0[i,:] = (temp0).*(1 .- cdf.(Normal(), (sel0[i] .- δt *sqrt(2)*σt.*nodes)./σw)).*weights
+        integ0[i,:] = (temp0).*(1 .- cdf.(Normal(), (sel0[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end
     for i = 1:Ni1
         temp1 = (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ[T+1])./σ[T+1])
         for j = 2:T
             temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ[T+j])./σ[T+j])
         end
-        integ1[i,:] = (temp1).*(cdf.(Normal(), (sel1[i] .- δt *sqrt(2)*σt.*nodes)./σw)).*weights
+        integ1[i,:] = (temp1).*(cdf.(Normal(), (sel1[i] .-(T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end
     #now, we have to sum across the number of nodes, that is, sum integ0/1 across rows
     contrib0 = repeat([0.],Ni0)
@@ -120,10 +126,9 @@ function mlesimple(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFrame)
     #the input is actually log(σ). Then, we exp(σ) to get the actual parameter
     β0 = theta[1:4]
     β1 = theta[5:8]
-    σ = theta[13:16] #the first T are σ0, one for each t. the last Ts are for σ1.
+    σ = exp.(theta[13:16]) #the first T are σ0, one for each t. the last Ts are for σ1.
     δz = theta[9:10]
     δt = theta[11]
-    σ = exp.(σ)
     σ0 = σ[1]
     σ1 = σ[2]
     σw = σ[3]
@@ -160,14 +165,14 @@ function mlesimple(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFrame)
         for j = 2:T
             temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ0))
         end
-        integ0[i,:] = (temp0).*(1 .- cdf.(Normal(), (sel0[i] .- δt *sqrt(2)*σt.*nodes)./σw)).*weights
+        integ0[i,:] = (temp0).*(1 .- cdf.(Normal(), (sel0[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end
     for i = 1:Ni1
         temp1 = (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ1))
         for j = 2:T
             temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ1))
         end
-        integ1[i,:] = (temp1).*(cdf.(Normal(), (sel1[i] .- δt *sqrt(2)*σt.*nodes)./σw)).*weights
+        integ1[i,:] = (temp1).*(cdf.(Normal(), (sel1[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end
     #now, we have to sum across the number of nodes, that is, sum integ0/1 across rows
     contrib0 = repeat([0.],Ni0)
@@ -180,8 +185,6 @@ function mlesimple(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFrame)
     end
     #so, contrib0 is the likelihood contribution of every individual i. now we take the log of each row and sum
     return ll = -sum(log.(contrib0)) - sum(log.(contrib1))
-
-
 end
 
 
@@ -209,11 +212,11 @@ theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
 
 
 #now estimate using simpler model
-β0 = [1., 1., 0.01, 0.1]
-β1 = [1., 2., 0.01, 1.]
+β0 = [1., 2., -0.01, 0.5]
+β1 = [.85, 3.4, -0.03, 1.]
 σ0 = log(sqrt(0.25))
 σ1 = log(sqrt(0.5))
-σw = 1.
+σw = 0.
 σt = log(sqrt(.4))
 δz = [5., 3.1]
 δt = 0.5
@@ -233,16 +236,34 @@ theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
 
 
 #=
-Optim.minimizer(mini)[13:13+2*T+1] = exp.(Optim.minimizer(mini)[13:13+2*T+1]).^2
+
+β0 = Optim.minimizer(mini1)[1:4]
+β1 = Optim.minimizer(mini1)[5:8]
+σ = exp.(Optim.minimizer(mini1)[13:16]).^2
+δz = Optim.minimizer(mini1)[9:10]
+δt = Optim.minimizer(mini1)[11]
+ρ = Optim.minimizer(mini1)[12]
+
+
+
+
+β0 = theta[1:4]
+β1 = theta[5:8]
+σ = theta[13:13+2*T+1] #the first T are σ0, one for each t. the last Ts are for σ1.
+δz = theta[9:10]
+δt = theta[11]
+σ = exp.(σ)
+σw = σ[2*T+1]
+σt = σ[2*T+2]
+ρ = theta[12]
+
 
 β0 = Optim.minimizer(mini)[1:4]
 β1 = Optim.minimizer(mini)[5:8]
-σ = Optim.minimizer(mini)[13:13+2*T+1]
+σ = exp.(Optim.minimizer(mini)[13:13+2*T+1]).^2
+σw = σ[2*T+1]
+σt = σ[2*T+2]
 δz = Optim.minimizer(mini)[9:10]
 δt = Optim.minimizer(mini)[11]
 ρ = Optim.minimizer(mini)[12]
-
-
-σ = exp.(σ)
 =#
-
