@@ -154,18 +154,18 @@ Ys1 = by(df1, :caseid) do x
 end
 
 #plot the sum of log earnings for school = 0
-y0_e = kde(Ys0.sumy0)
-x = range(30, stop = 50, length = 250) |> collect
+y0_e = kde(y0)
+x = range(7, stop = 14, length = 250) |> collect
 plot(x, z -> pdf(y0_e,z))
 
-y0_d = kde(Ys0.sumy)
+y0_d = kde(df0.y)
 plot(x, z -> pdf(y0_d,z))
 
 #plot the sum of log earnings for school = 1
-y1_e = kde(Ys1.sumy1)
+y1_e = kde(y1)
 plot(x, z -> pdf(y1_e,z))
 
-y1_d = kde(Ys1.sumy)
+y1_d = kde(df1.y)
 plot(x, z -> pdf(y1_d,z))
 
 
@@ -174,8 +174,6 @@ plot(x, z -> pdf(y1_d,z))
 
 Xs = [Xs DataFrame(sel = repeat([0.],Ni))]
 
-Xs0 = Xs[Xs.school .== 0,:]
-Xs1 = Xs[Xs.school .== 1,:]
 #this loop creates the difference of sum of future earnings in each choice
 #note that xsb means x s[ummed]b, while xsbc is the counterfactual experience
 #so, for school == 0 people, we use xsb, xsb2 for their β0, xsbc, xsbc2 for their β1

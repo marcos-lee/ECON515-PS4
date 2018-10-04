@@ -41,14 +41,14 @@ function mle(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFrame, quad::
     for i = 1:Ni0
         temp0 = (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ[1])./σ[1])
         for j = 2:T
-            temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ[j])./σ[j])
+            temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][j] .- ρ*sqrt(2)*σt.*nodes)./σ[j])./σ[j])
         end
         integ0[i,:] = (temp0).*(1 .- cdf.(Normal(), (sel0[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end
     for i = 1:Ni1
         temp1 = (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ[T+1])./σ[T+1])
         for j = 2:T
-            temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ[T+j])./σ[T+j])
+            temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][j] .- sqrt(2)*σt.*nodes)./σ[T+j])./σ[T+j])
         end
         integ1[i,:] = (temp1).*(cdf.(Normal(), (sel1[i] .-(T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end

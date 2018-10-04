@@ -10,8 +10,8 @@ using Plots
 using KernelDensity
 
 #df = load("fakedata.csv") |> DataFrame
-df = load("fake_data_julia.csv") |> DataFrame #i changed the variable name income to y
-#df = load("fake_data_julia_small.csv") |> DataFrame #i changed the variable name income to y
+#df = load("fake_data_julia.csv") |> DataFrame #i changed the variable name income to y
+df = load("fake_data_julia_small.csv") |> DataFrame #i changed the variable name income to y
 
 #define global number of periods and unique individuals
 const T = convert(Int64,maximum(df.age[df[:caseid] .== 1, :]) - minimum(df.age[df[:caseid] .== 1, :]) + 1)
@@ -97,14 +97,14 @@ function mle1(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFrame, quad:
     for i = 1:Ni0
         temp0 = (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ[1])./σ[1])
         for j = 2:T
-            temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ[j])./σ[j])
+            temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][j] .- ρ*sqrt(2)*σt.*nodes)./σ[j])./σ[j])
         end
         integ0[i,:] = (temp0).*(1 .- cdf.(Normal(), (sel0[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end
     for i = 1:Ni1
         temp1 = (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ[T+1])./σ[T+1])
         for j = 2:T
-            temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ[T+j])./σ[T+j])
+            temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][j] .- sqrt(2)*σt.*nodes)./σ[T+j])./σ[T+j])
         end
         integ1[i,:] = (temp1).*(cdf.(Normal(), (sel1[i] .-(T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end
@@ -123,7 +123,6 @@ end
 
 
 
-
 #just guess actual parameters
 β0 = [1., 2., -0.01, 0.5]
 β1 = [.85, 3.4, -0.03, 1.]
@@ -138,7 +137,7 @@ end
 theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
 
 #define nodes and weights of gauss hermite
-nnodes =  20
+nnodes =  100
 nodes, weights = gausshermite(nnodes)
 quad = [nnodes, nodes, weights]
 
@@ -190,25 +189,17 @@ for i = 1:Ni1*T
     end
 end
 
-y0 = [df0.xa df0.xb df0.xb2]*β0 .+ ρ.*θp[df.school .== 0] .+ ϵ0
-y1 = [df1.xa df1.xb df1.xb2]*β1 .+ θp[df.school .==1] .+ ϵ1
+y0 = [df0.xa df0.xb df0.xb2 df0.xc]*β0 .+ ρ.*θp[df.school .== 0] .+ ϵ0
+y1 = [df1.xa df1.xb df1.xb2 df1.xc]*β1 .+ θp[df.school .==1] .+ ϵ1
 
 
-df0 = [df0 DataFrame(y0 = y0)]
-df1 = [df1 DataFrame(y1 = y1)]
-Ys0 = by(df0, :caseid) do x
-    DataFrame(sumy0 = sum(x.y0), sumy = sum(x.y))
-end
-Ys1 = by(df1, :caseid) do x
-    DataFrame(sumy1 = sum(x.y1), sumy = sum(x.y))
-end
-
-y0_e = kde(Ys0.sumy0)
-x = range(30, stop = 50, length = 250) |> collect
+y0_e = kde(y0)
+x = range(8, stop = 28, length = 250) |> collect
 plot(x, z -> pdf(y0_e,z))
 
-y0_d = kde(Ys0.sumy)
+y0_d = kde(df0.y)
 plot(x, z -> pdf(y0_d,z))
+
 
 
 y1_e = kde(y1)
@@ -228,13 +219,13 @@ Xs1 = Xs[Xs.school .== 1,:]
 #so, for school == 0 people, we use xsb, xsb2 for their β0, xsbc, xsbc2 for their β1
 for i = 1:Ni
     if df.school[i] == 0
-        Xs.sel[i] = Xs.xsa[i]*(β1[1]-β0[1]) + Xs.xsbc[i]β1[2] - Xs.xsb[i]*β0[2] + Xs.xsbc2[i]β1[3] - Xs.xsb2[i]*β0[3] #transpose([Xs.xsa Xs.xsbc Xs.xsbc2 Xs.xsc][i,:])*β1 - transpose([Xs.xsa Xs.xsb Xs.xsb2 Xs.xsc][i,:])*β0
+        Xs.sel[i] = Xs.xsa[i]*(β1[1]-β0[1]) + Xs.xsbc[i]β1[2] - Xs.xsb[i]*β0[2] + Xs.xsbc2[i]β1[3] - Xs.xsb2[i]*β0[3] + Xs.xsc[i]*(β1[4]-β0[4]) #transpose([Xs.xsa Xs.xsbc Xs.xsbc2 Xs.xsc][i,:])*β1 - transpose([Xs.xsa Xs.xsb Xs.xsb2 Xs.xsc][i,:])*β0
     else
-        Xs.sel[i] = Xs.xsa[i]*(β1[1]-β0[1]) + Xs.xsb[i]β1[2] - Xs.xsbc[i]*β0[2] + Xs.xsb2[i]β1[3] - Xs.xsbc2[i]*β0[3]#transpose([Xs.xsa Xs.xsbc Xs.xsbc2 Xs.xsc][i,:])*β1 - transpose([Xs.xsa Xs.xsb Xs.xsb2 Xs.xsc][i,:])*β0
+        Xs.sel[i] = Xs.xsa[i]*(β1[1]-β0[1]) + Xs.xsb[i]β1[2] - Xs.xsbc[i]*β0[2] + Xs.xsb2[i]β1[3] - Xs.xsbc2[i]*β0[3] + Xs.xsc[i]*(β1[4]-β0[4])#transpose([Xs.xsa Xs.xsbc Xs.xsbc2 Xs.xsc][i,:])*β1 - transpose([Xs.xsa Xs.xsb Xs.xsb2 Xs.xsc][i,:])*β0
     end
 end
 
-sel = Xs.sel .- [Xs.za Xs.zb Xs.zc Xs.zd Xs.ze]*δz .- θ.*(T - T*ρ - δt) .- rand(Normal(0,σ[9]^2),Ni)
+sel = Xs.sel .- [Xs.za Xs.zb]*δz .- θ.*(T - T*ρ - δt) .- rand(Normal(0,σw),Ni)
 
 mean(sel .> 0)
 mean(Xs.school)
