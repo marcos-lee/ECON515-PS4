@@ -1,0 +1,130 @@
+----------------------------------------------------------------------------------------------------------
+      name:  <unnamed>
+       log:  C:\Users\YKChen\OneDrive\Rice 2018F\Labor\problem sets\PS4\PS4_TE by matching.log
+  log type:  text
+ opened on:  15 Oct 2018, 16:50:44
+
+. 
+. use "$DATA\nlsy79_homework_data", clear
+
+. gen exp=(age-18)-4*(school==1)
+
+. gen exp_sq=exp^2
+
+. gen log_earnings=log(earnings)
+
+. 
+. foreach te in ate atet{
+  2. cap teffects psmatch (log_earnings) (school scores_cognitive_skill meduc feduc ///
+>         numsibs tuit4 i.yob, probit), osample(overlap_score) `te'
+  3. 
+. preserve
+  4. 
+. drop if overlap_score==1
+  5. drop overlap_score
+  6. display "----- Treatment Effect: `te', PSM after dropping nonoverlapping observations -----"
+  7. teffects psmatch (log_earnings) (school scores_cognitive_skill meduc feduc ///
+>         numsibs tuit4 i.yob, probit), osample(overlap_score) `te'
+  8. restore
+  9. 
+. drop overlap_score
+ 10. display "----- Treatment Effect: `te', PSM without cognitive scores -----"
+ 11. teffects psmatch (log_earnings) ///
+> (school i.meduc i.feduc faminc79 numsibs tuit4 i.yob, probit), `te'
+ 12. display "----- Treatment Effect: `te', nearest neighbor matching -----"
+ 13. teffects nnmatch (log_earnings scores_cognitive_skill meduc feduc ///
+>         numsibs tuit4 i.yob) (school), `te'
+ 14. }
+(52 observations deleted)
+----- Treatment Effect: ate, PSM after dropping nonoverlapping observations -----
+
+Treatment-effects estimation                   Number of obs      =      3,540
+Estimator      : propensity-score matching     Matches: requested =          1
+Outcome model  : matching                                     min =          4
+Treatment model: probit                                       max =          4
+------------------------------------------------------------------------------
+             |              AI Robust
+log_earnings |      Coef.   Std. Err.      z    P>|z|     [95% Conf. Interval]
+-------------+----------------------------------------------------------------
+ATE          |
+      school |
+   (1 vs 0)  |   .1604349   .0193301     8.30   0.000     .1225486    .1983212
+------------------------------------------------------------------------------
+----- Treatment Effect: ate, PSM without cognitive scores -----
+
+Treatment-effects estimation                   Number of obs      =      3,592
+Estimator      : propensity-score matching     Matches: requested =          1
+Outcome model  : matching                                     min =          4
+Treatment model: probit                                       max =          4
+------------------------------------------------------------------------------
+             |              AI Robust
+log_earnings |      Coef.   Std. Err.      z    P>|z|     [95% Conf. Interval]
+-------------+----------------------------------------------------------------
+ATE          |
+      school |
+   (1 vs 0)  |   .1859059   .0167424    11.10   0.000     .1530915    .2187204
+------------------------------------------------------------------------------
+----- Treatment Effect: ate, nearest neighbor matching -----
+
+Treatment-effects estimation                   Number of obs      =      3,592
+Estimator      : nearest-neighbor matching     Matches: requested =          1
+Outcome model  : matching                                     min =          4
+Distance metric: Mahalanobis                                  max =          4
+------------------------------------------------------------------------------
+             |              AI Robust
+log_earnings |      Coef.   Std. Err.      z    P>|z|     [95% Conf. Interval]
+-------------+----------------------------------------------------------------
+ATE          |
+      school |
+   (1 vs 0)  |   .1709479   .0175452     9.74   0.000     .1365599     .205336
+------------------------------------------------------------------------------
+(0 observations deleted)
+----- Treatment Effect: atet, PSM after dropping nonoverlapping observations -----
+
+Treatment-effects estimation                   Number of obs      =      3,592
+Estimator      : propensity-score matching     Matches: requested =          1
+Outcome model  : matching                                     min =          4
+Treatment model: probit                                       max =          4
+------------------------------------------------------------------------------
+             |              AI Robust
+log_earnings |      Coef.   Std. Err.      z    P>|z|     [95% Conf. Interval]
+-------------+----------------------------------------------------------------
+ATET         |
+      school |
+   (1 vs 0)  |   .1015948   .0231744     4.38   0.000     .0561738    .1470158
+------------------------------------------------------------------------------
+----- Treatment Effect: atet, PSM without cognitive scores -----
+
+Treatment-effects estimation                   Number of obs      =      3,592
+Estimator      : propensity-score matching     Matches: requested =          1
+Outcome model  : matching                                     min =          4
+Treatment model: probit                                       max =          4
+------------------------------------------------------------------------------
+             |              AI Robust
+log_earnings |      Coef.   Std. Err.      z    P>|z|     [95% Conf. Interval]
+-------------+----------------------------------------------------------------
+ATET         |
+      school |
+   (1 vs 0)  |   .1466782   .0246775     5.94   0.000     .0983111    .1950452
+------------------------------------------------------------------------------
+----- Treatment Effect: atet, nearest neighbor matching -----
+
+Treatment-effects estimation                   Number of obs      =      3,592
+Estimator      : nearest-neighbor matching     Matches: requested =          1
+Outcome model  : matching                                     min =          4
+Distance metric: Mahalanobis                                  max =          4
+------------------------------------------------------------------------------
+             |              AI Robust
+log_earnings |      Coef.   Std. Err.      z    P>|z|     [95% Conf. Interval]
+-------------+----------------------------------------------------------------
+ATET         |
+      school |
+   (1 vs 0)  |   .1537531   .0213428     7.20   0.000     .1119219    .1955843
+------------------------------------------------------------------------------
+
+. log close
+      name:  <unnamed>
+       log:  C:\Users\YKChen\OneDrive\Rice 2018F\Labor\problem sets\PS4\PS4_TE by matching.log
+  log type:  text
+ closed on:  15 Oct 2018, 16:50:53
+----------------------------------------------------------------------------------------------------------

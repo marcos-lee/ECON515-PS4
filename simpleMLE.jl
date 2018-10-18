@@ -1,5 +1,5 @@
 #this is a simpler version, where σ for wage equations don't vary with t
-function mlesimplefake(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFrame)
+function mlesimplefake(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFrame, quad::Array)
     #unpack parameters. Note that, to ensure that the variances are never below 0
     #the input is actually log(σ). Then, we exp(σ) to get the actual parameter
     β0 = theta[1:4]
@@ -12,6 +12,9 @@ function mlesimplefake(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFra
     σw = σ[3]
     σt = σ[4]
     ρ = theta[12]
+    nnodes = quad[1]
+    nodes = quad[2]
+    weights = quad[3]
     #calculate the epsilons of the wage equation for each choice, for all (i,t), without θ
     epsilon0s = df0.y .- [df0.xa df0.xb df0.xb2 df0.xc]*β0
     epsilon1s = df1.y .- [df1.xa df1.xb df1.xb2 df1.xc]*β1
@@ -41,14 +44,14 @@ function mlesimplefake(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFra
     for i = 1:Ni0
         temp0 = (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ0))
         for j = 2:T
-            temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ0))
+            temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][j] .- ρ*sqrt(2)*σt.*nodes)./σ0))
         end
         integ0[i,:] = (temp0).*(1 .- cdf.(Normal(), (sel0[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end
     for i = 1:Ni1
         temp1 = (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ1))
         for j = 2:T
-            temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ1))
+            temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][j] .- sqrt(2)*σt.*nodes)./σ1))
         end
         integ1[i,:] = (temp1).*(cdf.(Normal(), (sel1[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end
@@ -110,14 +113,14 @@ function mlesimplenlsy(theta::Array, df0::DataFrame, df1::DataFrame, Xs::DataFra
     for i = 1:Ni0
         temp0 = (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ0))
         for j = 2:T
-            temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][1] .- ρ*sqrt(2)*σt.*nodes)./σ0))
+            temp0 = temp0 .* (pdf.(Normal(), (epsilon0s[df0.caseid .== i][j] .- ρ*sqrt(2)*σt.*nodes)./σ0))
         end
         integ0[i,:] = (temp0).*(1 .- cdf.(Normal(), (sel0[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end
     for i = 1:Ni1
         temp1 = (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ1))
         for j = 2:T
-            temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][1] .- sqrt(2)*σt.*nodes)./σ1))
+            temp1 = temp1 .* (pdf.(Normal(), (epsilon1s[df1.caseid .== i][j] .- sqrt(2)*σt.*nodes)./σ1))
         end
         integ1[i,:] = (temp1).*(cdf.(Normal(), (sel1[i] .- (T - T*ρ - δt)*sqrt(2)*σt.*nodes)./σw)).*weights
     end

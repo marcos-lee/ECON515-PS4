@@ -8,14 +8,14 @@ using FastGaussQuadrature
 using NLSolversBase
 using Plots
 using KernelDensity
-
+using StatsBase
 #df = load("fakedata.csv") |> DataFrame
 #df = load("fake_data_julia.csv") |> DataFrame #i changed the variable name income to y
 df = load("nlsy.csv") |> DataFrame #i changed the variable name income to y
 
 #define global number of periods and unique individuals
-const T = convert(Int64,maximum(df.age[df[:caseid] .== 1, :]) - minimum(df.age[df[:caseid] .== 1, :]) + 1)
-const Ni = convert(Int64,maximum(df.caseid))
+T = convert(Int64,maximum(df.age[df[:caseid] .== 1, :]) - minimum(df.age[df[:caseid] .== 1, :]) + 1)
+Ni = convert(Int64,maximum(df.caseid))
 
 #create period variable
 xb = zeros(Ni*T)
@@ -32,7 +32,7 @@ df = [df DataFrame(xbc = df.xb .- 4) ]
 
 #create the counterfactual experience
 df.xbc[df.school .== 1] = df.xbc[df.school .== 1] .+ 8
-df = [df DataFrame(xb2 = df.xb.*df.xb) DataFrame(xbc2 = df.xbc.*df.xbc) ]
+df = [df DataFrame(xb2 = df.xb.*df.xb) DataFrame(xbc2 = df.xbc.*df.xbc)]
 
 df = [df DataFrame(y = log.(df.earnings))]
 #create choice specific dataframes, with its own unique individual caseid from 1 to Ni0
@@ -49,41 +49,46 @@ sort!(df1, (:caseid, :t))
 
 #selection equation sum of X variables across t=1:T
 Xs = by(df, :caseid) do x
-    DataFrame(xsa = sum(x.xa), xsb = sum(x.xb), xsb2 = sum(x.xb2), xsbc = sum(x.xbc), xsbc2 = sum(x.xbc2), za = mean(x.xa), zb = mean(x.tuit4), zc = mean(x.faminc79), zd = mean(x.numsibs), ze = mean(x.scores_cognitive_skill), school = mean(x.school))
+    DataFrame(xsa = sum(x.xa), xsb = sum(x.xb), xsb2 = sum(x.xb2), xsbc = sum(x.xbc), xsbc2 = sum(x.xbc2), xsc = sum(x.faminc79), za = mean(x.xa), zb = mean(x.tuit4), zc = mean(x.faminc79), zd = mean(x.numsibs), ze = mean(x.scores_cognitive_skill), zf = mean(x.meduc), zg = mean(x.feduc), school = mean(x.school))
 end
 
 #Number of unique individuals in each choice dataframe
-const Ni0 = convert(Int64,maximum(df0.caseid))
-const Ni1 = convert(Int64,maximum(df1.caseid))
+Ni0 = convert(Int64,maximum(df0.caseid))
+Ni1 = convert(Int64,maximum(df1.caseid))
+
+constants = [T, Ni, Ni0, Ni1]
 
 
 include("MLE_NLSY_Functions.jl")
 
 
 #I've coded up simple OLS and Probit estimators, to get sensible estimators
-data0 = [df0.xa df0.xb df0.xb2]
-data1 = [df1.xa df1.xb df1.xb2]
-
+data0 = [df0.xa df0.xb df0.xb2 df0.faminc79]
+data1 = [df1.xa df1.xb df1.xb2 df1.faminc79]
+inv(transpose(data1)*data1)*(transpose(data1)*df1.y)
 ols0 = OLS(df0.y, data0)
 ols1 = OLS(df1.y, data1)
 
 eps0 = log(sqrt(mean((df0.y .- data0 * ols0).^2)))
 eps1 = log(sqrt(mean((df1.y .- data1 * ols1).^2)))
 
-datap = [Xs.zb Xs.zc Xs.zd Xs.ze Xs.school]
-thetap = [1. 1. 1. 1. 1.]
-@time prest = optimize(vars -> probit(vars, datap), thetap, Optim.Options(iterations = 5000))
+thetap = OLS(Xs.school, [ones(size(Xs.zb,1)) Xs.zb Xs.zc Xs.zd Xs.ze Xs.zf Xs.zg])
+
+datap = [Xs.zb Xs.zc Xs.zd Xs.ze Xs.zf Xs.zg Xs.school]
+
+prob = TwiceDifferentiable(vars -> probit(vars, datap), thetap; autodiff = :forward)
+@time prest = optimize(prob, thetap, Newton(), Optim.Options(show_trace=true))
 
 
 
 #let's put our initial guesses in an Array
-β0 = [ols0[1], ols0[2], ols0[3]]
-β1 = [ols1[1], ols1[2], ols1[3]]
+β0 = [ols0[1], ols0[2], ols0[3], ols0[4]]
+β1 = [ols1[1], ols1[2], ols1[3], ols1[4]]
 σ0 = repeat([eps0],T)
 σ1 = repeat([eps1],T)
 σw = 0. #just use the guess from fake data
 σt = log(sqrt(.4)) #just use the guess from fake data
-δz = [Optim.minimizer(prest)[1], Optim.minimizer(prest)[2], Optim.minimizer(prest)[3], Optim.minimizer(prest)[4], Optim.minimizer(prest)[5]]
+δz = [Optim.minimizer(prest)[1], Optim.minimizer(prest)[2], Optim.minimizer(prest)[3], Optim.minimizer(prest)[4], Optim.minimizer(prest)[5], Optim.minimizer(prest)[6], Optim.minimizer(prest)[7]]
 δt = 0.5 #just use the guess from fake data
 ρ = 0.8 #just use the guess from fake data
 
@@ -91,82 +96,91 @@ theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
 
 
 #define nodes and weights of gauss hermite
-nnodes = 20
+nnodes = 400
 nodes, weights = gausshermite(nnodes)
 quad = [nnodes, nodes, weights]
 
-#just check how much time it takes to evaluate
-@time mle(theta,df0, df1, Xs, quad)
 
+theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
 
-#this is the optimization routine.
-@time mini = optimize(vars -> mle(vars, df0, df1, Xs, quad), theta, Optim.Options(iterations = 10000))
+function wrapmle(theta)
+    return mle(theta, df0, df1, Xs, quad, constants)
+end
 
+func = TwiceDifferentiable(wrapmle, theta; autodiff = :forward)
+@time mini = optimize(func, theta, Newton(), Optim.Options(show_trace=true))
+
+numerical_hessian = hessian!(func,Optim.minimizer(mini))
+var_cov_matrix = inv(numerical_hessian)
+diag(var_cov_matrix)
 
 #unpack the estimates
-β0 = Optim.minimizer(mini)[1:3]
-β1 = Optim.minimizer(mini)[4:6]
-σ = exp.(Optim.minimizer(mini)[14:23]).^2
-δz = Optim.minimizer(mini)[7:11]
-δt = Optim.minimizer(mini)[12]
-ρ = Optim.minimizer(mini)[13]
+β0 = Optim.minimizer(mini)[1:4]
+β1 = Optim.minimizer(mini)[5:8]
+σ = exp.(Optim.minimizer(mini)[18:27])
+σw = σ[2*T+1]
+σt = σ[2*T+2]
+δz = Optim.minimizer(mini)[9:15]
+δt = Optim.minimizer(mini)[16]
+ρ = Optim.minimizer(mini)[17]
 
 
-θ = rand(Normal(0,σ[10]),Ni)
+
+θ = rand(Normal(0,σt),Ni)
 θp = repeat(θ, inner=T)
-ϵ0 = zeros(Ni0*T)
 
-ϵ1 = zeros(Ni1*T)
-for i = 1:Ni0*T
-    if df0.t[i] == 1
+ϵ0 = zeros(Ni*T)
+ϵ1 = zeros(Ni*T)
+for i = 1:Ni*T
+    if df.t[i] == 1
         ϵ0[i] = rand(Normal(0,σ[1]))
-    elseif df0.t[i] == 2
+    elseif df.t[i] == 2
         ϵ0[i] = rand(Normal(0,σ[2]))
-    elseif df0.t[i] == 3
+    elseif df.t[i] == 3
         ϵ0[i] = rand(Normal(0,σ[3]))
     else
         ϵ0[i] = rand(Normal(0,σ[4]))
     end
 end
-
-for i = 1:Ni1*T
-    if df1.t[i] == 1
+for i = 1:Ni*T
+    if df.t[i] == 1
         ϵ1[i] = rand(Normal(0,σ[5]))
-    elseif df0.t[i] == 2
+    elseif df.t[i] == 2
         ϵ1[i] = rand(Normal(0,σ[6]))
-    elseif df0.t[i] == 3
+    elseif df.t[i] == 3
         ϵ1[i] = rand(Normal(0,σ[7]))
     else
         ϵ1[i] = rand(Normal(0,σ[8]))
     end
 end
 
-y0 = [df0.xa df0.xb df0.xb2]*β0 .+ ρ.*θp[df.school .== 0] .+ ϵ0
-y1 = [df1.xa df1.xb df1.xb2]*β1 .+ θp[df.school .==1] .+ ϵ1
 
-df0 = [df0 DataFrame(y0 = y0)]
-df1 = [df1 DataFrame(y1 = y1)]
-Ys0 = by(df0, :caseid) do x
-    DataFrame(sumy0 = sum(x.y0), sumy = sum(x.y))
-end
-Ys1 = by(df1, :caseid) do x
-    DataFrame(sumy1 = sum(x.y1), sumy = sum(x.y))
+y0 = zeros(Ni*T)
+y1 = zeros(Ni*T)
+for i = 1:Ni*T
+    if df.school[i] == 1
+        y0[i] = [df.xa df.xbc df.xbc2 df.faminc79][i,:]'*β0 .+ ρ.*θp[i] .+ ϵ0[i]
+        y1[i] = [df.xa df.xb df.xb2 df.faminc79][i,:]'*β1 .+ θp[i] .+ ϵ1[i]
+    else
+        y0[i] = [df.xa df.xb df.xb2 df.faminc79][i,:]'*β0 .+ ρ.*θp[i] .+ ϵ0[i]
+        y1[i] = [df.xa df.xbc df.xbc2 df.faminc79][i,:]'*β1 .+ θp[i] .+ ϵ1[i]
+    end
 end
 
 #plot the sum of log earnings for school = 0
-y0_e = kde(y0)
-x = range(7, stop = 14, length = 250) |> collect
-plot(x, z -> pdf(y0_e,z))
-
+y0_e = kde(y0[df.school .== 0])
 y0_d = kde(df0.y)
-plot(x, z -> pdf(y0_d,z))
+x = range(7, stop = 14, length = 250) |> collect
+y0plot = [pdf(y0_e, x) pdf(y0_d, x)]
+plot(x, y0plot,title="estimated density of Y0", label=["Simulated" "Data"])
+savefig("y0")
 
 #plot the sum of log earnings for school = 1
-y1_e = kde(y1)
-plot(x, z -> pdf(y1_e,z))
-
+y1_e = kde(y1[df.school .== 1])
 y1_d = kde(df1.y)
-plot(x, z -> pdf(y1_d,z))
+y1plot = [pdf(y1_e, x) pdf(y1_d, x)]
+plot(x, y1plot,title="estimated density of Y1", label=["Simulated" "Data"])
+savefig("y1")
 
 
 
@@ -178,16 +192,52 @@ Xs = [Xs DataFrame(sel = repeat([0.],Ni))]
 #note that xsb means x s[ummed]b, while xsbc is the counterfactual experience
 #so, for school == 0 people, we use xsb, xsb2 for their β0, xsbc, xsbc2 for their β1
 for i = 1:Ni
-    if df.school[i] == 0
-        Xs.sel[i] = Xs.xsa[i]*(β1[1]-β0[1]) + Xs.xsbc[i]β1[2] - Xs.xsb[i]*β0[2] + Xs.xsbc2[i]β1[3] - Xs.xsb2[i]*β0[3] #transpose([Xs.xsa Xs.xsbc Xs.xsbc2 Xs.xsc][i,:])*β1 - transpose([Xs.xsa Xs.xsb Xs.xsb2 Xs.xsc][i,:])*β0
+    if Xs.school[i] == 0
+        Xs.sel[i] = Xs.xsa[i]*(β1[1]-β0[1]) + Xs.xsbc[i]*β1[2] - Xs.xsb[i]*β0[2] + Xs.xsbc2[i]*β1[3] - Xs.xsb2[i]*β0[3] + Xs.xsc[i]*(β1[4]-β0[4])
     else
-        Xs.sel[i] = Xs.xsa[i]*(β1[1]-β0[1]) + Xs.xsb[i]β1[2] - Xs.xsbc[i]*β0[2] + Xs.xsb2[i]β1[3] - Xs.xsbc2[i]*β0[3]#transpose([Xs.xsa Xs.xsbc Xs.xsbc2 Xs.xsc][i,:])*β1 - transpose([Xs.xsa Xs.xsb Xs.xsb2 Xs.xsc][i,:])*β0
+        Xs.sel[i] = Xs.xsa[i]*(β1[1]-β0[1]) + Xs.xsb[i]*β1[2] - Xs.xsbc[i]*β0[2] + Xs.xsb2[i]*β1[3] - Xs.xsbc2[i]*β0[3] + Xs.xsc[i]*(β1[4]-β0[4])
     end
 end
 
-sel = Xs.sel .- [Xs.za Xs.zb Xs.zc Xs.zd Xs.ze]*δz .- θ.*(T - T*ρ - δt) .- rand(Normal(0,σ[9]),Ni)
+sel = Xs.sel .- [Xs.za Xs.zb Xs.zc Xs.zd Xs.ze Xs.zf Xs.zg]*δz .+ θ.*(T - T*ρ - δt) .- rand(Normal(0,σw),Ni)
 
 
 #im getting the exact proportion. can't be.
 mean(sel .> 0)
 mean(Xs.school)
+
+
+summarystats(Xs.zb)
+cutoff = mean(Xs.zb)
+new_zb = zeros(Ni)
+
+for i = 1:Ni
+    if Xs.zb[i] < cutoff
+        new_zb[i] = 0.
+    else
+        new_zb[i] = Xs.zb[i]
+    end
+end
+
+Xs =[Xs DataFrame(zb_a = new_zb)]
+
+sel_a = Xs.sel .- [Xs.za Xs.zb_a Xs.zc Xs.zd Xs.ze Xs.zf Xs.zg]*δz .+ θ.*(T - T*ρ - δt) .- rand(Normal(0,σ[9]),Ni)
+
+
+#im getting the exact proportion. can't be.
+mean(sel_a .> 0)
+
+
+
+
+
+##estimate ATE
+ATE = mean(exp.(y1) .- exp.(y0))
+
+##estimate ATT
+ATT = mean(exp.(y1)[df.school .== 1] .- exp.(y0)[df.school .== 1])
+
+##estimate LATE
+zb_a = repeat(Xs.zb_a, inner=T)
+
+LATE = mean(exp.(y1)[zb_a .== 0] .- exp.(y0)[zb_a .== 0])
