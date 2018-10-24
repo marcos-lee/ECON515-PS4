@@ -11,8 +11,8 @@ using KernelDensity
 
 
 #df = load("fakedata.csv") |> DataFrame
-#df = load("fake_data_julia.csv") |> DataFrame #i changed the variable name income to y
-df = load("fake_data_julia_small.csv") |> DataFrame #I changed the variable name income to y
+df = load("fake_data_julia.csv") |> DataFrame #i changed the variable name income to y
+#df = load("fake_data_julia_small.csv") |> DataFrame #I changed the variable name income to y
 
 #define global number of periods and unique individuals
 T = convert(Int64,maximum(df.age[df[:caseid] .== 1, :]) - minimum(df.age[df[:caseid] .== 1, :]) + 1)
@@ -50,7 +50,24 @@ Ni1 = convert(Int64,maximum(df1.caseid))
 constants = [T, Ni, Ni0, Ni1]
 
 
-include("MLE_fakedata.jl")
+include("FunctionsFakeData.jl")
+
+#I've coded up simple OLS and Probit estimators, to get sensible estimators
+data0 = [df0.xa df0.xb df0.xb2 df0.xc]
+data1 = [df1.xa df1.xb df1.xb2 df1.xc]
+
+ols0 = OLS(df0.y, data0)
+ols1 = OLS(df1.y, data1)
+
+eps0 = log(sqrt(mean((df0.y .- data0 * ols0).^2)))
+eps1 = log(sqrt(mean((df1.y .- data1 * ols1).^2)))
+
+thetap = OLS(Xs.school, [ones(size(Xs.zb,1)) Xs.zb])
+
+datap = [ones(size(Xs.zb,1)) Xs.zb Xs.school]
+
+prob = TwiceDifferentiable(vars -> probit(vars, datap), thetap; autodiff = :forward)
+@time prest = optimize(prob, thetap, BFGS(), Optim.Options(show_trace=true))
 
 
 true_θ = [1.0, 2.0, -0.02,  0.5, 0.85, 3.5, -0.03, 1.0, 5.0, 3.0, 0.5, .8]
@@ -65,31 +82,30 @@ true_θ = vcat(true_θ, tσ0, tσ1, log(sqrt(.4)), log(1.))
 #δ_a,δ_b,δ_θ = 5.0,3.0,0.5
 
 #just guess actual parameters
-β0 = [1., 2., -0.02, .5]
-β1 = [.85, 3.5, -0.03, 1.]
-σ0 = repeat([log(sqrt(0.1))], T)
-σ1 = repeat([log(sqrt(0.1))],T)
-σw = 1.
-σt = log(sqrt(.4))
-δz = [5., 3.1]
-δt = 0.5
-ρ = 0.9
+β0 = [ols0[1], ols0[2], ols0[3], ols0[4]]
+β1 = [ols1[1], ols1[2], ols1[3], ols1[4]]
+σ0 = repeat([eps0],T)
+σ1 = repeat([eps1],T)
+σw = 0. #just use the guess from fake data
+σt = log(sqrt(.4)) #just use the guess from fake data
+δz = [-Optim.minimizer(prest)[1], -Optim.minimizer(prest)[2]]
+δt = 0.5 #just use the guess from fake data
+ρ = 0.8 #just use the guess from fake data
 
 theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
 #define nodes and weights of gauss hermite
-nnodes = 20
-nodes, weights = gausshermite(nnodes)
-quad = [nnodes, nodes, weights]
+nnodes = 50
+nodes, weight = gausshermite(nnodes)
+quad = [nnodes, nodes, weight]
 
 function wrapmle1(theta)
-    return mle1(theta, df0, df1, Xs, quad, constants)
+    return mle1(theta,df0,df1,Xs, quad, constants)
 end
 
 @time wrapmle1(theta)
 
 func = TwiceDifferentiable(wrapmle1, theta; autodiff = :forward)
-@time mini = optimize(func, theta, Optim.Options(show_trace=true, iterations = 5000))
-
+@time mini = optimize(func, theta, Newton(), Optim.Options(show_trace=true))
 
 numerical_hessian = hessian!(func,Optim.minimizer(mini))
 var_cov_matrix = inv(numerical_hessian)
@@ -138,11 +154,11 @@ y0 = zeros(Ni*T)
 y1 = zeros(Ni*T)
 for i = 1:Ni*T
     if df.school[i] == 1
-        y0[i] = [df.xa df.xbc df.xbc2 df.faminc79][i,:]'*β0 .+ ρ.*θp[i] .+ ϵ0[i]
-        y1[i] = [df.xa df.xb df.xb2 df.faminc79][i,:]'*β1 .+ θp[i] .+ ϵ1[i]
+        y0[i] = [df.xa df.xbc df.xbc2 df.xc][i,:]'*β0 .+ ρ.*θp[i] .+ ϵ0[i]
+        y1[i] = [df.xa df.xb df.xb2 df.xc][i,:]'*β1 .+ θp[i] .+ ϵ1[i]
     else
-        y0[i] = [df.xa df.xb df.xb2 df.faminc79][i,:]'*β0 .+ ρ.*θp[i] .+ ϵ0[i]
-        y1[i] = [df.xa df.xbc df.xbc2 df.faminc79][i,:]'*β1 .+ θp[i] .+ ϵ1[i]
+        y0[i] = [df.xa df.xb df.xb2 df.xc][i,:]'*β0 .+ ρ.*θp[i] .+ ϵ0[i]
+        y1[i] = [df.xa df.xbc df.xbc2 df.xc][i,:]'*β1 .+ θp[i] .+ ϵ1[i]
     end
 end
 
@@ -208,15 +224,38 @@ mean(sel_a .> 0)
 
 lateind = (sel .> 0) .-(sel_a .> 0)
 
-
+Ys = by(df, :caseid) do x
+    DataFrame(ys1 = sum(exp.(y1)), ys0 = sum(exp.(y0)))
+end
 
 ##estimate ATE
-ATE = mean((y1) .- (y0))
+ATE = log(mean((Ys.ys1) .- (Ys.ys0)))
 
 ##estimate ATT
-ATT = mean((y1)[df.school .== 1] .- (y0)[df.school .== 1])
+ATT = log(mean((Ys.ys1)[Xs.school .== 1] .- (Ys.ys0)[Xs.school .== 1]))
 
 ##estimate LATE
-zb_a = repeat(lateind, inner=T)
 
-LATE = mean((y1)[zb_a .== 1] .- (y0)[zb_a .== 1])
+
+LATE = log(mean((Ys.ys1)[lateind .== 1] .- (Ys.ys0)[lateind .== 1]))
+
+
+
+
+
+#I've coded up simple OLS and Probit estimators, to get sensible estimators
+data0 = [df0.xa df0.xb df0.xb2 df0.xc]
+data1 = [df1.xa df1.xb df1.xb2 df1.xc]
+
+ols0 = OLS(df0.y, data0)
+ols1 = OLS(df1.y, data1)
+
+eps0 = log(sqrt(mean((df0.y .- data0 * ols0).^2)))
+eps1 = log(sqrt(mean((df1.y .- data1 * ols1).^2)))
+
+thetap = OLS(Xs.school, [ones(size(Xs.zb,1)) Xs.xsb Xs.xsb2 Xs.xsc Xs.zb])
+
+datap = [ones(size(Xs.zb,1)) Xs.xsb Xs.xsb2 Xs.xsc Xs.zb Xs.school]
+
+prob = TwiceDifferentiable(vars -> probit(vars, datap), thetap; autodiff = :forward)
+@time prest = optimize(prob, thetap, BFGS(), Optim.Options(show_trace=true))

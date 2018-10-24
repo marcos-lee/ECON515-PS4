@@ -22,7 +22,7 @@
 
 \begin{frame}{Likelihood Function}
 \begin{align}
-l_i^1 = \int [\Pi_t \frac{1}{\sigma_{1t}} \phi(\frac{y_{it1} - X_{it1}\beta_1 - \theta_i}{\sigma_{1t}})]\Phi(\frac{\sum_t (X_{it1} - X_{it0}\tilde{\beta}) - Z_i \delta - \theta_i \gamma}{\sigma_w}) \\
+l_i^1 = \int [\Pi_t \frac{1}{\sigma_{1t}} \phi(\frac{y_{it1} - X_{it1}\beta_1 - \theta_i}{\sigma_{1t}})]\Phi(\frac{\sum_t (X_{it1} - X_{it0})\tilde{\beta} - Z_i \delta - \theta_i \gamma}{\sigma_w}) \\
  \frac{1}{\sqrt{2 \pi} \sigma_\theta} \exp(- (\frac{\theta_i}{\sqrt{2}\sigma_\theta})^2) d\theta
 \end{align}
 \begin{itemize}
@@ -87,10 +87,30 @@ Maximum:        2.957066
 \end{itemize}
 \end{frame}
 
+\begin{frame}{Likelihood Function}
+\begin{align}
+\Phi(\frac{Xs_{1i}\tilde{\beta} + (exp_{s=1,i} - exp_{s=0,i})\tilde{\beta} + (exp^2_{s=1,i} - exp^2_{s=0,i})\tilde{\beta} + Xs^4_{i}\tilde{\beta} - Z_i \delta - \theta_i \gamma}{\sigma_w}) \\
+\end{align}
+\centering
+\includegraphics[scale=0.59]{xsb_example.png}
+\end{frame}
+
 \begin{frame}{NLSY data}
 \begin{itemize}
 \item Initial guesses:
 \item OLS on each wage equation, probit on Zs, standard errors from OLS
+\item probit on Xs, Zs, but experience is a perfect predictor!
+\end{itemize}
+\end{frame}
+
+\begin{frame}{What I tried}
+\begin{itemize}
+\item X = experience, experience2 and family income
+\item Z = tuition, family income, numsibs, scores, mother and father education
+\item If I take the log(10000*income) and tuition, standard errors blow up to 1e10 on $\delta_Z$ and $\sigma_w$, very low variaton may be cause
+\item If i just multiply family income and tuition by $10^a, a=1,2,3,4$, model doesn't converge
+\item Same thing happens by removing family income from Z
+\item Same thing happens by permutating with numsbis, scores, mother and father educ.
 \end{itemize}
 \end{frame}
 

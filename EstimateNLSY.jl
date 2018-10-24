@@ -12,6 +12,8 @@ using StatsBase
 #df = load("fakedata.csv") |> DataFrame
 #df = load("fake_data_julia.csv") |> DataFrame #i changed the variable name income to y
 df = load("nlsy.csv") |> DataFrame #i changed the variable name income to y
+df.faminc79 = (1 .+ df.faminc79).*10
+df.tuit4 = (1 .+ df.tuit4).*10
 
 #define global number of periods and unique individuals
 T = convert(Int64,maximum(df.age[df[:caseid] .== 1, :]) - minimum(df.age[df[:caseid] .== 1, :]) + 1)
@@ -20,7 +22,7 @@ Ni = convert(Int64,maximum(df.caseid))
 #create period variable
 xb = zeros(Ni*T)
 for i = 1:Ni*T
-    if df.school[i] == 1
+    if df.school[i] == 0
         xb[i] = df.age[i] - 18
     else
         xb[i] = df.age[i] - 22
@@ -52,6 +54,10 @@ Xs = by(df, :caseid) do x
     DataFrame(xsa = sum(x.xa), xsb = sum(x.xb), xsb2 = sum(x.xb2), xsbc = sum(x.xbc), xsbc2 = sum(x.xbc2), xsc = sum(x.faminc79), za = mean(x.xa), zb = mean(x.tuit4), zc = mean(x.faminc79), zd = mean(x.numsibs), ze = mean(x.scores_cognitive_skill), zf = mean(x.meduc), zg = mean(x.feduc), school = mean(x.school))
 end
 
+Zs = by(df, :caseid) do x
+    DataFrame(za = mean(x.xa), zb = mean(x.tuit4), zc = mean(x.faminc79), zd = mean(x.numsibs), ze = mean(x.scores_cognitive_skill), zf = mean(x.meduc), zg = mean(x.feduc), school = mean(x.school))
+end
+
 #Number of unique individuals in each choice dataframe
 Ni0 = convert(Int64,maximum(df0.caseid))
 Ni1 = convert(Int64,maximum(df1.caseid))
@@ -59,27 +65,26 @@ Ni1 = convert(Int64,maximum(df1.caseid))
 constants = [T, Ni, Ni0, Ni1]
 
 
-include("MLE_NLSY_Functions.jl")
+include("FunctionsNLSY.jl")
 
 
 #I've coded up simple OLS and Probit estimators, to get sensible estimators
 data0 = [df0.xa df0.xb df0.xb2 df0.faminc79]
 data1 = [df1.xa df1.xb df1.xb2 df1.faminc79]
-inv(transpose(data1)*data1)*(transpose(data1)*df1.y)
+
 ols0 = OLS(df0.y, data0)
 ols1 = OLS(df1.y, data1)
 
 eps0 = log(sqrt(mean((df0.y .- data0 * ols0).^2)))
 eps1 = log(sqrt(mean((df1.y .- data1 * ols1).^2)))
 
-thetap = OLS(Xs.school, [ones(size(Xs.zb,1)) Xs.zb Xs.zc Xs.zd Xs.ze Xs.zf Xs.zg])
+thetap = OLS(Xs.school, [ones(size(Xs.zb,1)) Xs.zb Xs.zd Xs.ze Xs.zf Xs.zg])
 
-datap = [Xs.zb Xs.zc Xs.zd Xs.ze Xs.zf Xs.zg Xs.school]
+datap = [ones(size(Xs.zb,1)) Xs.zb Xs.zd Xs.ze Xs.zf Xs.zg Xs.school]
 
 prob = TwiceDifferentiable(vars -> probit(vars, datap), thetap; autodiff = :forward)
-@time prest = optimize(prob, thetap, Newton(), Optim.Options(show_trace=true))
-
-
+@time prest = optimize(prob, thetap, BFGS(), Optim.Options(show_trace=true))
+diag(inv(hessian!(prob,Optim.minimizer(prest))))
 
 #let's put our initial guesses in an Array
 β0 = [ols0[1], ols0[2], ols0[3], ols0[4]]
@@ -88,20 +93,16 @@ prob = TwiceDifferentiable(vars -> probit(vars, datap), thetap; autodiff = :forw
 σ1 = repeat([eps1],T)
 σw = 0. #just use the guess from fake data
 σt = log(sqrt(.4)) #just use the guess from fake data
-δz = [Optim.minimizer(prest)[1], Optim.minimizer(prest)[2], Optim.minimizer(prest)[3], Optim.minimizer(prest)[4], Optim.minimizer(prest)[5], Optim.minimizer(prest)[6], Optim.minimizer(prest)[7]]
+δz = -[Optim.minimizer(prest)[1], Optim.minimizer(prest)[2], Optim.minimizer(prest)[3], Optim.minimizer(prest)[4], Optim.minimizer(prest)[5], Optim.minimizer(prest)[6]]
 δt = 0.5 #just use the guess from fake data
 ρ = 0.8 #just use the guess from fake data
-
-theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
+theta = vcat(β0, β1, δt, ρ, σ0, σ1, σw, σt, δz)
 
 
 #define nodes and weights of gauss hermite
-nnodes = 400
-nodes, weights = gausshermite(nnodes)
-quad = [nnodes, nodes, weights]
-
-
-theta = vcat(β0, β1, δz, δt, ρ, σ0, σ1, σw, σt)
+nnodes = 50
+nodes, weight = gausshermite(nnodes)
+quad = [nnodes, nodes, weight]
 
 function wrapmle(theta)
     return mle(theta, df0, df1, Xs, quad, constants)
@@ -110,20 +111,21 @@ end
 func = TwiceDifferentiable(wrapmle, theta; autodiff = :forward)
 @time mini = optimize(func, theta, Newton(), Optim.Options(show_trace=true))
 
-numerical_hessian = hessian!(func,Optim.minimizer(mini))
+diag(inv(hessian!(func,Optim.minimizer(mini))))
+grad = gradient!(func,Optim.minimizer(mini))
+numerical_hessian - numerical_hessian1
 var_cov_matrix = inv(numerical_hessian)
 diag(var_cov_matrix)
 
 #unpack the estimates
 β0 = Optim.minimizer(mini)[1:4]
 β1 = Optim.minimizer(mini)[5:8]
-σ = exp.(Optim.minimizer(mini)[18:27])
+σ = exp.(Optim.minimizer(mini)[11:20])
 σw = σ[2*T+1]
 σt = σ[2*T+2]
-δz = Optim.minimizer(mini)[9:15]
-δt = Optim.minimizer(mini)[16]
-ρ = Optim.minimizer(mini)[17]
-
+δz = Optim.minimizer(mini)[21:end]
+δt = Optim.minimizer(mini)[9]
+ρ = Optim.minimizer(mini)[10]
 
 
 θ = rand(Normal(0,σt),Ni)
@@ -199,7 +201,7 @@ for i = 1:Ni
     end
 end
 
-sel = Xs.sel .- [Xs.za Xs.zb Xs.zc Xs.zd Xs.ze Xs.zf Xs.zg]*δz .+ θ.*(T - T*ρ - δt) .- rand(Normal(0,σw),Ni)
+sel = Xs.sel .- [Xs.za Xs.zb Xs.zd Xs.ze Xs.zf Xs.zg]*δz .+ θ.*(T - T*ρ - δt) .- rand(Normal(0,σw),Ni)
 
 
 #im getting the exact proportion. can't be.
@@ -221,7 +223,7 @@ end
 
 Xs =[Xs DataFrame(zb_a = new_zb)]
 
-sel_a = Xs.sel .- [Xs.za Xs.zb_a Xs.zc Xs.zd Xs.ze Xs.zf Xs.zg]*δz .+ θ.*(T - T*ρ - δt) .- rand(Normal(0,σ[9]),Ni)
+sel_a = Xs.sel .- [Xs.za Xs.zb_a Xs.zd Xs.ze Xs.zf Xs.zg]*δz .+ θ.*(T - T*ρ - δt) .- rand(Normal(0,σ[9]),Ni)
 
 
 #im getting the exact proportion. can't be.
